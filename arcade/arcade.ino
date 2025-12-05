@@ -1,78 +1,184 @@
 #include <WiFiS3.h>
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
-// Wi-Fi credentials
-char ssid[] = "TP-Link_74B0";
-char pass[] = "68705985";
+// ================== Wi-Fi credentials ==================
+char ssid[] = "AndroidAPC010lidia";
+char pass[] = "lidia2004";
 
 WiFiServer server(80);
 
-// Pin definitions
-#define JOY_X A0
-#define JOY_Y A1
-#define JOY_BTN 2
-#define MODE_BTN 7
-#define BUZZER 8
-#define LED_PIN 9
+// ================== Pins ==================
+#define JOY_X     A0
+#define JOY_Y     A1
+#define JOY_BTN   8
 
-bool multiplayer = false;
+// Shield buttons
+#define BTN_A     2   // Menu UP  + P2 UP
+#define BTN_B     3   // Select / Back
+#define BTN_C     4   // Menu DOWN + P2 DOWN
+#define BTN_D     5
+#define BTN_E     6
+#define BTN_F     7
 
-// Player positions
-float p1x = 160, p1y = 120;
-float p2x = 100, p2y = 120;
+// Other hardware
+#define BUZZER    10
+#define LED_PIN   9
 
-// Player 2 velocity
-int p2vx = 0, p2vy = 0;
+// OLED config
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
+// LDR light sensor
+#define LDR_PIN A2
+bool isNightMode = true;
+
+
+// =========================================================
+// OLED Helpers
+// =========================================================
+void beep(int freq, int duration) {
+  tone(BUZZER, freq, duration);
+}
+
+void setOledBrightness(bool night) {
+  display.ssd1306_command(SSD1306_SETCONTRAST);
+  display.ssd1306_command(night ? 10 : 255);
+}
+
+// ================== OLED: Show Scores ==================
+int lastScore1 = -1;
+int lastScore2 = -1;
+
+void updateOLED(int s1, int s2) {
+  if (s1 == lastScore1 && s2 == lastScore2) return;
+
+  lastScore1 = s1;
+  lastScore2 = s2;
+
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.print("P1:");
+  display.print(s1);
+
+  display.setCursor(0, 32);
+  display.print("P2:");
+  display.print(s2);
+
+  display.display();
+}
+
+// ================== OLED: Menu Item ==================
+void showMenuOLED(String item) {
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setCursor(0,0);
+  display.print("MENU");
+
+  display.setTextSize(2);
+  display.setCursor(0,20);
+  display.print("> ");
+  display.print(item);
+
+  display.display();
+}
+
+// ================== OLED: Game Title ==================
+void showGameOLED(String title) {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0,0);
+  display.println(title);
+
+  display.setTextSize(1);
+  display.setCursor(0,40);
+  display.println("Running...");
+
+  display.display();
+}
+
+
+// =========================================================
+// SETUP
+// =========================================================
 void setup() {
   Serial.begin(9600);
-  WiFi.begin(ssid, pass);
 
-  Serial.print("Connecting to Wi-Fi...");
+  // Wi-Fi connection
+  WiFi.begin(ssid, pass);
+  Serial.print("Connecting...");
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
+    delay(400);
     Serial.print(".");
   }
-
-  Serial.println("\n✅ Connected!");
-  Serial.print("Arduino IP: ");
+  Serial.println("\nConnected!");
   Serial.println(WiFi.localIP());
   server.begin();
-  Serial.println("🌐 Web server started.");
 
-  // Pins
+  // PinModes
   pinMode(JOY_X, INPUT);
   pinMode(JOY_Y, INPUT);
   pinMode(JOY_BTN, INPUT_PULLUP);
-  pinMode(MODE_BTN, INPUT_PULLUP);
+
+  pinMode(BTN_A, INPUT_PULLUP);
+  pinMode(BTN_B, INPUT_PULLUP);
+  pinMode(BTN_C, INPUT_PULLUP);
+  pinMode(BTN_D, INPUT_PULLUP);
+  pinMode(BTN_E, INPUT_PULLUP);
+  pinMode(BTN_F, INPUT_PULLUP);
+
   pinMode(BUZZER, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
+
+  // OLED
+  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+    Serial.println("OLED failed!");
+    while (1);
+  }
+
+  display.clearDisplay();
+  display.setTextColor(SSD1306_WHITE);
+  display.setTextSize(2);
+  display.setCursor(0,0);
+  display.println("Mini Arcade");
+  display.display();
+  delay(1500);
+
+  display.clearDisplay();
+  display.display();
+
+  setOledBrightness(true);
 }
 
+
+// =========================================================
+// LOOP
+// =========================================================
 void loop() {
-  // Toggle mode button
-  static unsigned long lastToggle = 0;
-  if (digitalRead(MODE_BTN) == LOW && millis() - lastToggle > 400) {
-    multiplayer = !multiplayer;
-    Serial.print("Mode changed to: ");
-    Serial.println(multiplayer ? "Multiplayer" : "Single Player");
 
-    tone(BUZZER, multiplayer ? 900 : 600, 100);
-    digitalWrite(LED_PIN, HIGH);
-    delay(80);
-    digitalWrite(LED_PIN, LOW);
+  // ----------------- LDR Day/Night Detection -----------------
+  int lightValue = analogRead(LDR_PIN);
+  static bool nightState = true;
 
-    lastToggle = millis();
+  if (lightValue > 850 && nightState == true) {
+    nightState = false;
+    isNightMode = false;
+    setOledBrightness(false);
+    Serial.println("Mode changed → DAY");
   }
 
-  // Move player 2 if active
-  if (multiplayer) {
-    p2x += p2vx * 2;
-    p2y += p2vy * 2;
-    p2x = constrain(p2x, 10, 310);
-    p2y = constrain(p2y, 10, 230);
+  if (lightValue < 300 && nightState == false) {
+    nightState = true;
+    isNightMode = true;
+    setOledBrightness(true);
+    Serial.println("Mode changed → NIGHT");
   }
 
-  // Handle HTTP
+
+  // ----------------- HTTP Server -----------------
   WiFiClient client = server.available();
   if (!client) return;
 
@@ -80,59 +186,85 @@ void loop() {
   client.flush();
   Serial.println(req);
 
-  // --- Player 1 joystick data ---
+
+  // ================== /data endpoint ==================
   if (req.indexOf("GET /data") >= 0) {
+
     int x = analogRead(JOY_X);
     int y = analogRead(JOY_Y);
-    int btn = digitalRead(JOY_BTN);
+
+    bool joy = !digitalRead(JOY_BTN);
+    bool a = !digitalRead(BTN_A);
+    bool b = !digitalRead(BTN_B);
+    bool c = !digitalRead(BTN_C);
+    bool d = !digitalRead(BTN_D);
+    bool e = !digitalRead(BTN_E);
+    bool f = !digitalRead(BTN_F);
 
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
-    client.println("Connection: close");
     client.println();
     client.print("{\"x\":"); client.print(x);
     client.print(",\"y\":"); client.print(y);
-    client.print(",\"btn\":"); client.print(btn == LOW ? 1 : 0);
+    client.print(",\"joyBtn\":"); client.print(joy);
+    client.print(",\"btnA\":"); client.print(a);
+    client.print(",\"btnB\":"); client.print(b);
+    client.print(",\"btnC\":"); client.print(c);
+    client.print(",\"btnD\":"); client.print(d);
+    client.print(",\"btnE\":"); client.print(e);
+    client.print(",\"btnF\":"); client.print(f);
     client.print("}");
   }
 
-  // --- Player 2 input handler ---
-  else if (req.indexOf("GET /input") >= 0) {
-    if (req.indexOf("UP") > 0)    { p2vy = -1; p2vx = 0; }
-    if (req.indexOf("DOWN") > 0)  { p2vy = 1;  p2vx = 0; }
-    if (req.indexOf("LEFT") > 0)  { p2vx = -1; p2vy = 0; }
-    if (req.indexOf("RIGHT") > 0) { p2vx = 1;  p2vy = 0; }
-    tone(BUZZER, 700, 50);
-
-    client.println("HTTP/1.1 204 No Content");
-    client.println("Connection: close");
-    client.println();
-  }
-
-  // --- Player 2 position (for /screen) ---
-  else if (req.indexOf("GET /p2") >= 0) {
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: application/json");
-    client.println();
-    client.print("{\"x\":");
-    client.print(p2x);
-    client.print(",\"y\":");
-    client.print(p2y);
-    client.print("}");
-  }
-
-  // --- Mode JSON endpoint ---
+  // ================== /mode endpoint ==================
   else if (req.indexOf("GET /mode") >= 0) {
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: application/json");
     client.println();
-    client.print("{\"multi\":");
-    client.print(multiplayer ? "true" : "false");
+    client.print("{\"night\":");
+    client.print(isNightMode ? "true" : "false");
     client.print("}");
   }
 
-  // --- Game screen (phones) ---
+  // ================== /score endpoint ==================
+  else if (req.indexOf("GET /score") >= 0) {
+    int idx1 = req.indexOf("s1=");
+    int idx2 = req.indexOf("s2=");
+
+    int s1 = (idx1 > 0) ? req.substring(idx1+3).toInt() : 0;
+    int s2 = (idx2 > 0) ? req.substring(idx2+3).toInt() : 0;
+
+    updateOLED(s1, s2);
+
+    client.println("HTTP/1.1 204 No Content");
+    client.println();
+  }
+
+  // ================== /oled endpoint ==================
+  else if (req.indexOf("GET /oled") >= 0) {
+    int idx = req.indexOf("title=");
+    if (idx > 0) {
+      String t = req.substring(idx + 6);
+      t.trim();
+      showGameOLED(t);
+    }
+    client.println("HTTP/1.1 204 No Content");
+    client.println();
+  }
+
+  // ================== /sound endpoint ==================
+  else if (req.indexOf("GET /sound") >= 0) {
+    if (req.indexOf("menu") > 0) beep(700, 80);
+    if (req.indexOf("hit") > 0)  beep(300, 50);
+    if (req.indexOf("score") > 0) beep(1000, 150);
+
+    client.println("HTTP/1.1 204 No Content");
+    client.println();
+  }
+
+  // ================== /screen HTML ==================
   else if (req.indexOf("GET /screen") >= 0) {
+
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/html");
     client.println();
@@ -142,151 +274,222 @@ void loop() {
 <head>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <style>
-body{background:#000;margin:0;overflow:hidden;}
-canvas{display:block;margin:0 auto;background:#111;}
-h2{color:#0f0;text-align:center;font-family:sans-serif;}
+body { background:#000; margin:0; overflow:hidden; }
+canvas { display:block; margin:0 auto; background:#111; }
+h2 { color:#0f0; text-align:center; font-family:sans-serif; margin:8px; }
 </style>
 </head>
 <body>
-<h2>🎮 Game Screen</h2>
+<h2>Mini Arcade</h2>
 <canvas id="game" width="320" height="240"></canvas>
+
 <script>
-let c = document.getElementById('game');
-let ctx = c.getContext('2d');
+// ================== GLOBAL VARS ==================
+let night = false;
 
-// player positions
-let p1 = {x:160, y:120};
-let p2 = {x:100, y:120};
-
-// last known data
-let lastP2 = {x:100, y:120};
-
-// fetch joystick + player2 together
-async function update() {
-  // Get joystick
-  let j;
+// Poll day/night mode
+async function checkMode(){
   try {
-    let r = await fetch('/data',{cache:'no-store'});
-    j = await r.json();
-  } catch(e) {
-    j = {x:512, y:512, btn:0};
-  }
+    let r = await fetch('/mode');
+    let j = await r.json();
+    night = j.night;
+  } catch(e){}
+}
+setInterval(checkMode, 1000);
 
-  // Update player 1
-  p1.x += (j.x - 512) / 200;
-  p1.y += (j.y - 512) / 200;
-  p1.x = Math.max(10, Math.min(310, p1.x));
-  p1.y = Math.max(10, Math.min(230, p1.y));
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 
-  // Get player 2 position every frame (keeps in sync)
-  try {
-    let r2 = await fetch('/p2',{cache:'no-store'});
-    let j2 = await r2.json();
-    lastP2.x = j2.x;
-    lastP2.y = j2.y;
-  } catch(e) {}
+let currentScreen = "menu";
+let menuIndex = 0;
 
-  // Draw everything cleanly each frame
-  ctx.fillStyle = '#111';
-  ctx.fillRect(0, 0, 320, 240);
+let lastBtnA = 0, lastBtnB = 0, lastBtnC = 0;
 
-  // Player 1 (green)
-  ctx.fillStyle = '#0f0';
-  ctx.beginPath();
-  ctx.arc(p1.x, p1.y, 10, 0, Math.PI*2);
-  ctx.fill();
 
-  // Player 2 (blue)
-  ctx.fillStyle = '#00f';
-  ctx.beginPath();
-  ctx.arc(lastP2.x, lastP2.y, 10, 0, Math.PI*2);
-  ctx.fill();
+// ================== PING PONG STATE ==================
+let pp_ball = { x:160, y:120, vx:2, vy:2 };
+let pp_p1 = { y:120 };
+let pp_p2 = { y:120 };
+let pp_score1 = 0, pp_score2 = 0;
 
-  ctx.fillStyle = '#0f0';
-  ctx.font = '12px monospace';
-  ctx.fillText(`BTN:${j.btn?'Pressed':'Released'}`, 10, 20);
+function pingpongReset(dir=1){
+  pp_ball.x = 160;
+  pp_ball.y = 120;
+  pp_ball.vx = 2 * dir;
+  pp_ball.vy = (Math.random()*2 - 1) * 2;
 }
 
-// Steady animation loop
+// ================== DRAW PING PONG ==================
+function drawPingPong(){
+  ctx.fillStyle = night ? "#000" : "#111";
+  ctx.fillRect(0,0,320,240);
+
+  ctx.strokeStyle="#333";
+  ctx.setLineDash([5,5]);
+  ctx.beginPath();
+  ctx.moveTo(160,0);
+  ctx.lineTo(160,240);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = night ? "#0a0" : "#0f0";
+  ctx.font="16px monospace";
+  ctx.fillText(pp_score1, 120, 30);
+  ctx.fillText(pp_score2, 200, 30);
+
+  ctx.fillRect(20, pp_p1.y - 20, 6, 40);
+  ctx.fillRect(294, pp_p2.y - 20, 6, 40);
+
+  ctx.beginPath();
+  ctx.arc(pp_ball.x, pp_ball.y, 6, 0, Math.PI*2);
+  ctx.fill();
+}
+
+// ================== UPDATE PING PONG ==================
+function updatePingPong(data){
+  pp_p1.y += (data.y - 512) / 40;
+  pp_p1.y = Math.max(20, Math.min(220, pp_p1.y));
+
+  if (data.btnA) pp_p2.y -= 4;
+  if (data.btnC) pp_p2.y += 4;
+  pp_p2.y = Math.max(20, Math.min(220, pp_p2.y));
+
+  pp_ball.x += pp_ball.vx;
+  pp_ball.y += pp_ball.vy;
+
+  if (pp_ball.y <= 6 || pp_ball.y >= 234) pp_ball.vy *= -1;
+
+  // Left paddle hit
+  if (pp_ball.x <= 26 &&
+      pp_ball.y >= pp_p1.y - 20 &&
+      pp_ball.y <= pp_p1.y + 20){
+    pp_ball.vx *= -1;
+    pp_ball.x = 27;
+    fetch('/sound?type=hit');
+  }
+
+  // Right paddle hit
+  if (pp_ball.x >= 294 &&
+      pp_ball.y >= pp_p2.y - 20 &&
+      pp_ball.y <= pp_p2.y + 20){
+    pp_ball.vx *= -1;
+    pp_ball.x = 293;
+    fetch('/sound?type=hit');
+  }
+
+  // Scoring
+  if (pp_ball.x < 0){
+    pp_score2++;
+    pingpongReset(1);
+    fetch('/sound?type=score');
+  }
+
+  if (pp_ball.x > 320){
+    pp_score1++;
+    pingpongReset(-1);
+    fetch('/sound?type=score');
+  }
+
+  fetch(`/score?s1=${pp_score1}&s2=${pp_score2}`);
+  drawPingPong();
+
+  if (data.btnB && !lastBtnB) currentScreen="menu";
+}
+
+// ================== MENU ==================
+function drawMenu(){
+  ctx.fillStyle = night ? "#000" : "#111";
+  ctx.fillRect(0,0,320,240);
+
+  ctx.fillStyle = night ? "#0a0" : "#0f0";
+  ctx.font = "16px monospace";
+  ctx.textAlign="center";
+  ctx.fillText("Select Game", 160, 40);
+
+  let items = ["Ping Pong", "Snake", "Flappy Bird"];
+  ctx.font = "14px monospace";
+
+  for (let i = 0; i < items.length; i++){
+    ctx.fillStyle = (i===menuIndex ? "#0f0" : "#666");
+    ctx.fillText((i===menuIndex?"> ":"") + items[i], 160, 100 + i * 30);
+  }
+}
+
+function drawPlaceholder(title){
+  ctx.fillStyle = night ? "#000" : "#111";
+  ctx.fillRect(0,0,320,240);
+
+  ctx.fillStyle = night ? "#0a0" : "#0f0";
+  ctx.font="18px monospace";
+  ctx.fillText(title,160,60);
+
+  ctx.font="12px monospace";
+  ctx.fillText("Game coming soon...",160,110);
+
+  ctx.font="10px monospace";
+  ctx.fillText("Press B to return",160,200);
+}
+
+// ================== MAIN UPDATE LOOP ==================
+async function update(){
+  let data;
+  try{
+    let r = await fetch('/data',{cache:'no-store'});
+    data = await r.json();
+  } catch(e){
+    data = {btnA:0,btnB:0,btnC:0,y:512};
+  }
+
+  if (currentScreen==="menu"){
+    if (data.btnA && !lastBtnA) menuIndex = (menuIndex+2) % 3;
+    if (data.btnC && !lastBtnC) menuIndex = (menuIndex+1) % 3;
+
+    if (data.btnB && !lastBtnB){
+      let game = ["PING PONG", "SNAKE", "FLAPPY"][menuIndex];
+      fetch(`/oled?title=${game}`);
+      fetch(`/sound?type=menu`);
+      currentScreen = ["pingpong","snake","flappy"][menuIndex];
+    }
+
+    drawMenu();
+  }
+
+  else if (currentScreen === "pingpong"){
+    updatePingPong(data);
+  }
+
+  else if (currentScreen === "snake"){
+    drawPlaceholder("SNAKE");
+    if (data.btnB && !lastBtnB) currentScreen="menu";
+  }
+
+  else if (currentScreen === "flappy"){
+    drawPlaceholder("FLAPPY");
+    if (data.btnB && !lastBtnB) currentScreen="menu";
+  }
+
+  lastBtnA = data.btnA;
+  lastBtnB = data.btnB;
+  lastBtnC = data.btnC;
+}
+
 setInterval(update, 100);
 </script>
-
 </body>
 </html>
 )html");
   }
 
-  // --- Controller page ---
-  else if (req.indexOf("GET /controller") >= 0) {
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: text/html");
-    client.println();
-    client.println(R"html(
-<!DOCTYPE html>
-<html>
-<head>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<style>
-body {background:#000;color:#0f0;text-align:center;font-family:sans-serif;}
-button {
-  font-size:32px;margin:10px;padding:20px 40px;
-  background:#0f0;color:#000;border:none;border-radius:10px;
-}
-</style>
-</head>
-<body>
-<h2>Player 2 Controller</h2>
-<div>
-  <button ontouchstart="send('UP')">UP</button><br>
-  <button ontouchstart="send('LEFT')">LEFT</button>
-  <button ontouchstart="send('RIGHT')">RIGHT</button><br>
-  <button ontouchstart="send('DOWN')">DOWN</button>
-</div>
-<script>
-function send(cmd){
-  fetch('/input?player=2&cmd=' + cmd);
-}
-</script>
-</body>
-</html>
-)html");
-  }
-
-  // --- Menu page ---
+  // ================== ROOT PAGE ==================
   else {
     client.println("HTTP/1.1 200 OK");
     client.println("Content-Type: text/html");
     client.println();
-    client.println(R"html(
-<!DOCTYPE html>
-<html>
-<head>
-<meta name='viewport' content='width=device-width,initial-scale=1'>
-<style>
-body{background:#111;color:#0f0;text-align:center;font-family:sans-serif;}
-</style>
-</head>
-<body>
-<h2>🕹️ Mini Arcade</h2>
-<p id='mode'>Loading...</p>
-<p><a href="/screen" style="color:#0f0;">Open Game Screen</a></p>
-<p><a href="/controller" style="color:#0f0;">Open Controller</a></p>
-<p>(Press mode button on Arduino to toggle modes)</p>
-<script>
-async function updateMode(){
-  let r=await fetch('/mode');
-  let j=await r.json();
-  document.getElementById('mode').innerText =
-    "Current Mode: " + (j.multi ? "Multiplayer 🧑‍🤝‍🧑" : "Single Player 🎮");
-}
-setInterval(updateMode,1000);
-updateMode();
-</script>
-</body>
-</html>
-)html");
+    client.println("<html><body style='background:#111;color:#0f0;text-align:center'>");
+    client.println("<h1>Mini Arcade</h1>");
+    client.println("<p><a style='color:#0f0' href='/screen'>Open Game Screen</a></p>");
+    client.println("</body></html>");
   }
 
-  delay(1);
   client.stop();
 }
